@@ -13,13 +13,23 @@ func TestComposeGenerator(t *testing.T) {
 	const testFile = "docker-compose.yml"
 
 	dbService := *compose.NewService("db").
-		AddEnvironment("POSTGRES_PASSWORD", "secretpassword").
-		AddEnvironment("POSTGRES_DB", "myapp").
-		SetImage("postgres:14").
+		SetContainerName("db").
+		AddPort("5432", "5432").
+		AddEnvironment("POSTGRES_DB", "POSTGRES_DB").
+		AddEnvironment("POSTGRES_USER", "${POSTGRES_USER}").
+		AddEnvironment("POSTGRES_PASSWORD", "${POSTGRES_PASSWORD}").
+		SetImage("pgvector/pgvector:pg16").
+		SetRestartPolicy("unless-stopped").
 		AddVolume(compose.Volume{
-			Name:   "db_data",
-			Driver: "local",
-		})
+			Source: "./init-db.sql",
+			Target: "/docker-entrypoint-initdb.d/init-db.sql",
+		}).
+		SetHealthCheck(
+			[]string{"CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ragtag"},
+			"10s",
+			"5s",
+			5,
+		)
 
 	apiService := *compose.NewService("api").
 		AddPort("8080", "8080").
@@ -96,25 +106,6 @@ func verifyGeneratedYAML(t *testing.T, filename string) {
 	dependencies, ok := api["depends_on"].([]interface{})
 	if !ok || len(dependencies) != 1 || dependencies[0] != "db" {
 		t.Error("Dependencias incorrectas")
-	}
-
-	// Verificar volumenes
-	volumes, ok := result["volumes"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Estructura de volúmenes inválida")
-	}
-
-	if len(volumes) != 1 {
-		t.Fatal("Número incorrecto de volúmenes")
-	}
-
-	dbVol, ok := volumes["db_data"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Estructura de volumen db_data inválida")
-	}
-
-	if dbVol["driver"] != "local" {
-		t.Error("Driver de volumen incorrecto")
 	}
 
 	// Verificar que no hay campos vacíos

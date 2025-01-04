@@ -3,21 +3,22 @@ package compose
 import (
 	"fmt"
 	"os"
-
-	"gopkg.in/yaml.v3"
+	"strings"
 )
 
-// PortMapping representa un mapeo de puertos
-type PortMapping string
-
-// Environment representa una variable de entorno
-type Environment map[string]string
-
 // NetworkConfig representa la configuración de una red
-type NetworkConfig struct {
-	Name    string            `yaml:"name,omitempty"`
-	Driver  string            `yaml:"driver,omitempty"`
-	Options map[string]string `yaml:"options,omitempty"`
+type etworkConfig struct {
+	Name    string
+	Driver  string
+	Options map[string]string
+}
+
+// HealthCheck representa la configuración de healthcheck
+type HealthCheck struct {
+	Test     []string
+	Interval string
+	Timeout  string
+	Retries  int
 }
 
 // Service representa un servicio en docker-compose
@@ -27,40 +28,35 @@ type Service struct {
 	containerName       string
 	ports               []string
 	environment         map[string]string
-	volumes             []string
+	volumes             []Volume
 	serviceDependencies []string
 	command             string
 	networks            []string
+	restartPolicy       string
+	healthCheck         *HealthCheck
 }
 
-// MarshalYAML implementa la interfaz yaml.Marshaler para Service
-func (s Service) MarshalYAML() (interface{}, error) {
-	return struct {
-		Image         string            `yaml:"image"`
-		ContainerName string            `yaml:"container_name,omitempty"`
-		Ports         []string          `yaml:"ports,omitempty"`
-		Environment   map[string]string `yaml:"environment,omitempty"`
-		Volumes       []string          `yaml:"volumes,omitempty"`
-		DependsOn     []string          `yaml:"depends_on,omitempty"`
-		Command       string            `yaml:"command,omitempty"`
-		Networks      []string          `yaml:"networks,omitempty"`
-	}{
-		Image:         s.image,
-		ContainerName: s.containerName,
-		Ports:         s.ports,
-		Environment:   s.environment,
-		Volumes:       s.volumes,
-		DependsOn:     s.serviceDependencies,
-		Command:       s.command,
-		Networks:      s.networks,
-	}, nil
+// SetRestartPolicy establece la política de reinicio del servicio
+func (s *Service) SetRestartPolicy(policy string) *Service {
+	s.restartPolicy = policy
+	return s
+}
+
+// SetHealthCheck configura el healthcheck del servicio
+func (s *Service) SetHealthCheck(test []string, interval, timeout string, retries int) *Service {
+	s.healthCheck = &HealthCheck{
+		Test:     test,
+		Interval: interval,
+		Timeout:  timeout,
+		Retries:  retries,
+	}
+	return s
 }
 
 // Volume representa un volumen en docker-compose
 type Volume struct {
-	Name   string            `yaml:"-"`
-	Driver string            `yaml:"driver,omitempty"`
-	Labels map[string]string `yaml:"labels,omitempty"`
+	Source string `yaml:"-"`
+	Target string `yaml:"-"`
 }
 
 // Network representa una red en docker-compose
@@ -85,21 +81,10 @@ func NewCompose(version string, services ...Service) (*composeConfig, error) {
 		services: services,
 	}
 
-	// Extraer volúmenes y redes de los servicios
-	volumesMap := make(map[string]Volume)
+	// Extraer redes de los servicios
 	networksMap := make(map[string]Network)
 
 	for _, service := range services {
-		// Extraer volúmenes
-		for _, vol := range service.volumes {
-			if vol != "" {
-				volumesMap[vol] = Volume{
-					Name:   vol,
-					Driver: "local",
-				}
-			}
-		}
-
 		// Extraer redes
 		for _, net := range service.networks {
 			if net != "" {
@@ -111,11 +96,7 @@ func NewCompose(version string, services ...Service) (*composeConfig, error) {
 		}
 	}
 
-	// Convertir maps a slices
-	for _, vol := range volumesMap {
-		config.volumes = append(config.volumes, vol)
-	}
-
+	// Convertir map de redes a slice
 	for _, net := range networksMap {
 		config.networks = append(config.networks, net)
 	}
@@ -123,76 +104,102 @@ func NewCompose(version string, services ...Service) (*composeConfig, error) {
 	return config, nil
 }
 
-// orderedMap es una estructura que preserva el orden de inserción
-type orderedMap struct {
-	keys   []string
-	values map[string]interface{}
-}
+// generateYAML genera el contenido YAML respetando el orden de los servicios
+func (c composeConfig) generateYAML() ([]byte, error) {
+	var b strings.Builder
 
-// MarshalYAML implementa la interfaz yaml.Marshaler para generar el formato correcto
-func (c composeConfig) MarshalYAML() (interface{}, error) {
-	// Crear map ordenado de servicios
-	services := &orderedMap{
-		keys:   make([]string, 0, len(c.services)),
-		values: make(map[string]interface{}),
+	// Escribir versión
+	fmt.Fprintf(&b, "version: %q\n", c.version)
+
+	// Escribir servicios
+	b.WriteString("services:\n")
+	for _, service := range c.services {
+		fmt.Fprintf(&b, "  %s:\n", service.containerName)
+		fmt.Fprintf(&b, "    image: %q\n", service.image)
+
+		if service.containerName != "" {
+			fmt.Fprintf(&b, "    container_name: %q\n", service.containerName)
+		}
+
+		if len(service.ports) > 0 {
+			b.WriteString("    ports:\n")
+			for _, port := range service.ports {
+				fmt.Fprintf(&b, "      - \"%s\"\n", port)
+			}
+		}
+
+		if len(service.environment) > 0 {
+			b.WriteString("    environment:\n")
+			for key, value := range service.environment {
+				fmt.Fprintf(&b, "      %q: %q\n", key, value)
+			}
+		}
+
+		if len(service.volumes) > 0 {
+			b.WriteString("    volumes:\n")
+			for _, vol := range service.volumes {
+				fmt.Fprintf(&b, "      - %s:%s\n", vol.Source, vol.Target)
+			}
+		}
+
+		if len(service.serviceDependencies) > 0 {
+			b.WriteString("    depends_on:\n")
+			for _, dep := range service.serviceDependencies {
+				fmt.Fprintf(&b, "      - %q\n", dep)
+			}
+		}
+
+		if service.command != "" {
+			fmt.Fprintf(&b, "    command: %q\n", service.command)
+		}
+
+		if len(service.networks) > 0 {
+			b.WriteString("    networks:\n")
+			for _, net := range service.networks {
+				fmt.Fprintf(&b, "      - %q\n", net)
+			}
+		}
+
+		if service.restartPolicy != "" {
+			fmt.Fprintf(&b, "    restart: %q\n", service.restartPolicy)
+		}
+
+		if service.healthCheck != nil {
+			b.WriteString("    healthcheck:\n")
+			fmt.Fprintf(&b, "      test:\n")
+			for _, test := range service.healthCheck.Test {
+				fmt.Fprintf(&b, "        - %q\n", test)
+			}
+			if service.healthCheck.Interval != "" {
+				fmt.Fprintf(&b, "      interval: %q\n", service.healthCheck.Interval)
+			}
+			if service.healthCheck.Timeout != "" {
+				fmt.Fprintf(&b, "      timeout: %q\n", service.healthCheck.Timeout)
+			}
+			if service.healthCheck.Retries > 0 {
+				fmt.Fprintf(&b, "      retries: %d\n", service.healthCheck.Retries)
+			}
+		}
 	}
 
-	for _, s := range c.services {
-		services.keys = append(services.keys, s.containerName)
-		services.values[s.containerName] = s
-	}
-
-	// Crear map ordenado de volúmenes
-	volumes := &orderedMap{
-		keys:   make([]string, 0, len(c.volumes)),
-		values: make(map[string]interface{}),
-	}
-
-	for _, v := range c.volumes {
-		volumes.keys = append(volumes.keys, v.Name)
-		volumes.values[v.Name] = v
-	}
-
-	// Crear estructura final
-	type finalConfig struct {
-		Version  string      `yaml:"version"`
-		Services *orderedMap `yaml:"services"`
-		Volumes  *orderedMap `yaml:"volumes,omitempty"`
-		Networks *orderedMap `yaml:"networks,omitempty"`
-	}
-
-	config := finalConfig{
-		Version:  c.version,
-		Services: services,
-		Volumes:  volumes,
-	}
-
-	// Solo agregar networks si hay redes definidas
+	// Escribir redes si existen
 	if len(c.networks) > 0 {
-		// Crear map ordenado de redes
-		networks := &orderedMap{
-			keys:   make([]string, 0, len(c.networks)),
-			values: make(map[string]interface{}),
+		b.WriteString("networks:\n")
+		for _, network := range c.networks {
+			fmt.Fprintf(&b, "  %s:\n", network.Name)
+			if network.Driver != "" {
+				fmt.Fprintf(&b, "    driver: %q\n", network.Driver)
+			}
+			if len(network.Options) > 0 {
+				b.WriteString("    options:\n")
+				for key, value := range network.Options {
+					fmt.Fprintf(&b, "      %q: %q\n", key, value)
+				}
+			}
 		}
-
-		for _, n := range c.networks {
-			networks.keys = append(networks.keys, n.Name)
-			networks.values[n.Name] = n
-		}
-
-		config.Networks = networks
 	}
 
-	return config, nil
-}
-
-// MarshalYAML implementa la interfaz yaml.Marshaler para orderedMap
-func (m *orderedMap) MarshalYAML() (interface{}, error) {
-	result := make(map[string]interface{})
-	for _, key := range m.keys {
-		result[key] = m.values[key]
-	}
-	return result, nil
+	return []byte(b.String()), nil
 }
 
 // NewService crea una nueva configuración de servicio
@@ -202,10 +209,16 @@ func NewService(name string) *Service {
 		containerName:       name,
 		ports:               []string{},
 		environment:         make(map[string]string),
-		volumes:             []string{},
+		volumes:             []Volume{},
 		serviceDependencies: []string{},
 		networks:            []string{},
 	}
+}
+
+// SetContainerName establece el nombre del contenedor
+func (s *Service) SetContainerName(name string) *Service {
+	s.containerName = name
+	return s
 }
 
 // AddPort añade un mapeo de puertos al servicio
@@ -222,7 +235,7 @@ func (s *Service) AddEnvironment(key, value string) *Service {
 
 // AddVolume añade un volumen al servicio
 func (s *Service) AddVolume(volume Volume) *Service {
-	s.volumes = append(s.volumes, volume.Name)
+	s.volumes = append(s.volumes, volume)
 	return s
 }
 
@@ -247,8 +260,8 @@ func (c *composeConfig) SaveIfDifferent(filename ...string) error {
 		composePath = filename[0]
 	}
 
-	// Generar nuevo YAML
-	yamlData, err := yaml.Marshal(c)
+	// Generar nuevo YAML usando nuestra implementación personalizada
+	yamlData, err := c.generateYAML()
 	if err != nil {
 		return fmt.Errorf("error al generar YAML: %v", err)
 	}
