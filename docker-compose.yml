@@ -1,4 +1,4 @@
-version: "3.8"
+version: "0.1"
 services:
     api:
         image: golang:1.19
@@ -8,9 +8,16 @@ services:
         environment:
             DB_HOST: db
             DB_PORT: "5432"
+        depends_on:
+            - db
     db:
         image: postgres:14
         container_name: db
         environment:
             POSTGRES_DB: myapp
             POSTGRES_PASSWORD: secretpassword
+        volumes:
+            - db_data
+volumes:
+    db_data:
+        driver: local

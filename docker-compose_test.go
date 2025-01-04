@@ -1,8 +1,10 @@
-package compose
+package compose_test
 
 import (
 	"os"
 	"testing"
+
+	"github.com/cdvelop/compose"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,26 +12,27 @@ import (
 func TestComposeGenerator(t *testing.T) {
 	const testFile = "docker-compose.yml"
 
-	// Función helper para crear una configuración de prueba
-	createTestConfig := func() *ComposeConfig {
-		return &ComposeConfig{
-			Version: "3.8",
-			Services: []Service{
-				*NewService("api").
-					AddPort("8080", "8080").
-					AddEnvironment("DB_HOST", "db").
-					AddEnvironment("DB_PORT", "5432").
-					SetImage("golang:1.19"),
-				*NewService("db").
-					AddEnvironment("POSTGRES_PASSWORD", "secretpassword").
-					AddEnvironment("POSTGRES_DB", "myapp").
-					SetImage("postgres:14"),
-			},
-		}
-	}
+	dbService := *compose.NewService("db").
+		AddEnvironment("POSTGRES_PASSWORD", "secretpassword").
+		AddEnvironment("POSTGRES_DB", "myapp").
+		SetImage("postgres:14").
+		AddVolume(compose.Volume{
+			Name:   "db_data",
+			Driver: "local",
+		})
 
-	config := createTestConfig()
-	err := config.SaveIfDifferent(testFile)
+	apiService := *compose.NewService("api").
+		AddPort("8080", "8080").
+		AddEnvironment("DB_HOST", "db").
+		AddEnvironment("DB_PORT", "5432").
+		SetImage("golang:1.19").
+		DependsOn(dbService)
+
+	config, err := compose.NewCompose("0.1", dbService, apiService)
+	if err != nil {
+		t.Fatalf("Error creando configuración: %v", err)
+	}
+	err = config.SaveIfDifferent(testFile)
 	if err != nil {
 		t.Fatalf("Error inesperado: %v", err)
 	}
@@ -82,6 +85,36 @@ func verifyGeneratedYAML(t *testing.T, filename string) {
 	}
 	if env["DB_HOST"] != "db" || env["DB_PORT"] != "5432" {
 		t.Error("Valores de entorno incorrectos")
+	}
+
+	// Verificar container_name
+	if api["container_name"] != "api" {
+		t.Error("container_name incorrecto")
+	}
+
+	// Verificar dependencias
+	dependencies, ok := api["depends_on"].([]interface{})
+	if !ok || len(dependencies) != 1 || dependencies[0] != "db" {
+		t.Error("Dependencias incorrectas")
+	}
+
+	// Verificar volumenes
+	volumes, ok := result["volumes"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Estructura de volúmenes inválida")
+	}
+
+	if len(volumes) != 1 {
+		t.Fatal("Número incorrecto de volúmenes")
+	}
+
+	dbVol, ok := volumes["db_data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Estructura de volumen db_data inválida")
+	}
+
+	if dbVol["driver"] != "local" {
+		t.Error("Driver de volumen incorrecto")
 	}
 
 	// Verificar que no hay campos vacíos
