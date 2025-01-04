@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+    api:
+        image: golang:1.19
+        container_name: api-service
+        ports:
+            - 8080:8080
+        environment:
+            DB_HOST: db
+            DB_PORT: "5432"
+    db:
+        image: postgres:14
+        container_name: postgres-db
+        environment:
+            POSTGRES_DB: myapp
+            POSTGRES_PASSWORD: secretpassword
