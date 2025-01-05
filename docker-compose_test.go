@@ -15,9 +15,9 @@ func TestComposeGenerator(t *testing.T) {
 	dbService := *compose.NewService("db").
 		SetContainerName("db").
 		AddPort("5432", "5432").
-		AddEnvironment("POSTGRES_DB", "POSTGRES_DB").
-		AddEnvironment("POSTGRES_USER", "${POSTGRES_USER}").
-		AddEnvironment("POSTGRES_PASSWORD", "${POSTGRES_PASSWORD}").
+		AddEnvironment("POSTGRES_DB").
+		AddEnvironment("POSTGRES_USER").
+		AddEnvironment("POSTGRES_PASSWORD").
 		SetImage("pgvector/pgvector:pg16").
 		SetRestartPolicy("unless-stopped").
 		AddVolume(compose.Volume{
